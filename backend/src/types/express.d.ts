@@ -1,11 +1,11 @@
-import type { AuthenticatedAppUser } from './auth.js'
+import type { AuthenticatedAppUser } from './auth.js';
 
 declare global {
   namespace Express {
     interface Request {
-      appUser?: AuthenticatedAppUser
+      appUser?: AuthenticatedAppUser;
     }
   }
 }
 
-export {}
+export {};

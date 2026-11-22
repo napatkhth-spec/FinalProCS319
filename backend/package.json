@@ -9,12 +9,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test src/tests/auth.test.ts src/tests/auth-api.test.ts src/tests/product-query.test.ts src/tests/product-image-validation.test.ts",
     "prisma:generate": "prisma generate",
-    "prisma:validate": "prisma validate"
+    "prisma:validate": "prisma validate",
+    "prisma:seed": "prisma db seed --config prisma7.config.ts",
+    "images:generate": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-seed-product-images.ps1",
+    "images:import": "tsx scripts/import-seed-product-images.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.0.1",
     "@prisma/client": "^7.0.1",
-    "@supabase/supabase-js": "^2.119.2",
     "argon2": "^0.45.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",

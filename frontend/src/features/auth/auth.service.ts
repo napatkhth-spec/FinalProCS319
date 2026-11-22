@@ -1,25 +1,34 @@
-import { apiClient } from '../../lib/axios'
-import type { ApiResponse, AppRole, AuthResponseData, User } from '../../types'
+import { apiClient } from '../../lib/axios';
+import type { ApiResponse, AppRole, AuthResponseData, User } from '../../types';
 
 export async function registerWithEmail(email: string, password: string, fullName: string): Promise<void> {
-  await apiClient.post('/auth/register', { email, password, fullName })
+  await apiClient.post('/auth/register', { email, password, fullName });
 }
 
 export async function loginWithEmail(email: string, password: string): Promise<AuthResponseData> {
-  const response = await apiClient.post<ApiResponse<AuthResponseData>>('/auth/login', { email, password })
-  if (!response.data.data) throw new Error('เข้าสู่ระบบไม่สำเร็จ')
-  return response.data.data
+  const response = await apiClient.post<ApiResponse<AuthResponseData>>('/auth/login', { email, password });
+  if (!response.data.data) throw new Error('เข้าสู่ระบบไม่สำเร็จ');
+  return response.data.data;
 }
 
 export async function logoutFromBackend(): Promise<void> {
-  await apiClient.post('/auth/logout')
+  await apiClient.post('/auth/logout');
 }
 
-export async function openShop(shopName: string, province: string, description?: string, farmAddress?: string) {
-  const response = await apiClient.post<ApiResponse<{ roles: AppRole[]; farmerProfile: NonNullable<User['farmerProfile']> }>>(
-    '/farmers/profile',
-    { shopName, province, ...(description ? { description } : {}), ...(farmAddress ? { farmAddress } : {}) },
-  )
-  if (!response.data.data) throw new Error('ไม่สามารถเปิดร้านได้')
-  return response.data.data
+export async function openShop(
+  shopName: string,
+  province: string,
+  description?: string,
+  farmAddress?: string,
+) {
+  const response = await apiClient.post<
+    ApiResponse<{ roles: AppRole[]; farmerProfile: NonNullable<User['farmerProfile']> }>
+  >('/farmers/profile', {
+    shopName,
+    province,
+    ...(description ? { description } : {}),
+    ...(farmAddress ? { farmAddress } : {}),
+  });
+  if (!response.data.data) throw new Error('ไม่สามารถเปิดร้านได้');
+  return response.data.data;
 }
