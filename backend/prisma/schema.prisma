@@ -1,0 +1,386 @@
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum AppRole {
+  BUYER
+  FARMER
+  ADMIN
+}
+
+enum FarmerVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  OUT_OF_STOCK
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  ONLINE
+  COD
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// ==========================================
+// USERS
+// ==========================================
+
+model User {
+  id        String   @id @db.Uuid
+  email     String   @unique
+  fullName  String
+  phone     String?
+  avatarUrl String?
+  isActive  Boolean  @default(true)
+  passwordHash    String?   @map("password_hash") @db.Text
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  farmerProfile FarmerProfile?
+  roles         UserRoleAssignment[]
+  cart          Cart?
+  addresses     Address[]
+  orders        Order[]  @relation("BuyerOrders")
+  reviews       Review[]
+  authSessions  AuthSession[]
+
+  @@map("users")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @unique @map("refresh_token_hash") @db.VarChar(64)
+  tokenFamilyId    String    @map("token_family_id") @db.Uuid
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(3)
+  lastUsedAt       DateTime? @map("last_used_at") @db.Timestamptz(3)
+  userAgent        String?   @map("user_agent") @db.VarChar(512)
+  ipAddress        String?   @map("ip_address") @db.Inet
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@index([tokenFamilyId])
+  @@map("auth_sessions")
+}
+
+model UserRoleAssignment {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  role      AppRole
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@index([role])
+  @@map("user_roles")
+}
+
+// ==========================================
+// FARMER PROFILES
+// ==========================================
+
+model FarmerProfile {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  userId             String                   @unique @db.Uuid
+  shopName           String
+  description        String?
+  farmAddress        String?
+  province           String?
+  profileImage       String?
+  verificationStatus FarmerVerificationStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products Product[]
+  orders   Order[]
+
+  @@map("farmer_profiles")
+}
+
+// ==========================================
+// CATEGORIES
+// ==========================================
+
+model Category {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @unique
+  description String?
+  imageUrl    String?
+  parentId    String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+// ==========================================
+// PRODUCTS
+// ==========================================
+
+model Product {
+  id          String        @id @default(uuid()) @db.Uuid
+  farmerId    String        @db.Uuid
+  categoryId  String        @db.Uuid
+  name        String
+  description String?
+  sku         String?       @unique
+  price       Decimal       @db.Decimal(10, 2)
+  stock       Int           @default(0)
+  unit        String        @default("ชิ้น")
+  status      ProductStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  farmer       FarmerProfile  @relation(fields: [farmerId], references: [id], onDelete: Restrict)
+  category     Category       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  images       ProductImage[]
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+  reviews      Review[]
+
+  @@index([farmerId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([name])
+  @@map("products")
+}
+
+// ==========================================
+// PRODUCT IMAGES
+// ==========================================
+
+model ProductImage {
+  id          String   @id @default(uuid()) @db.Uuid
+  productId   String   @db.Uuid
+  storagePath String
+  isPrimary   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@map("product_images")
+}
+
+// ==========================================
+// ADDRESSES
+// ==========================================
+
+model Address {
+  id            String  @id @default(uuid()) @db.Uuid
+  userId        String  @db.Uuid
+  recipientName String
+  phone         String
+  addressLine   String
+  subDistrict   String
+  district      String
+  province      String
+  postalCode    String
+  isDefault     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+// ==========================================
+// CARTS
+// ==========================================
+
+model Cart {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @unique @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  @@map("carts")
+}
+
+// ==========================================
+// CART ITEMS
+// ==========================================
+
+model CartItem {
+  id        String @id @default(uuid()) @db.Uuid
+  cartId    String @db.Uuid
+  productId String @db.Uuid
+  quantity  Int    @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([cartId, productId])
+  @@index([productId])
+  @@map("cart_items")
+}
+
+// ==========================================
+// ORDERS
+// ==========================================
+
+model Order {
+  id          String      @id @default(uuid()) @db.Uuid
+  orderNumber String      @unique
+  buyerId     String      @db.Uuid
+  farmerId    String      @db.Uuid
+  status      OrderStatus @default(PENDING)
+
+  subtotal    Decimal @db.Decimal(10, 2)
+  shippingFee Decimal @default(0) @db.Decimal(10, 2)
+  totalAmount Decimal @db.Decimal(10, 2)
+
+  // Shipping address snapshot
+  recipientName  String
+  recipientPhone String
+  addressLine    String
+  subDistrict    String
+  district       String
+  province       String
+  postalCode     String
+  note           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  buyer     User          @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  farmer    FarmerProfile @relation(fields: [farmerId], references: [id], onDelete: Restrict)
+  items     OrderItem[]
+  payments  Payment[]
+
+  @@index([buyerId])
+  @@index([farmerId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+// ==========================================
+// ORDER ITEMS
+// ==========================================
+
+model OrderItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  orderId     String  @db.Uuid
+  productId   String  @db.Uuid
+
+  productName String
+  unitPrice   Decimal @db.Decimal(10, 2)
+  quantity    Int
+  subtotal    Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// ==========================================
+// PAYMENTS
+// ==========================================
+
+model Payment {
+  id            String        @id @default(uuid()) @db.Uuid
+  orderId       String        @db.Uuid
+  method        PaymentMethod
+  status        PaymentStatus @default(PENDING)
+  amount        Decimal       @db.Decimal(10, 2)
+
+  provider      String?
+  transactionId String?       @unique
+  paidAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([status])
+  @@map("payments")
+}
+
+// ==========================================
+// REVIEWS
+// ==========================================
+
+model Review {
+  id        String  @id @default(uuid()) @db.Uuid
+  userId    String  @db.Uuid
+  productId String  @db.Uuid
+  rating    Int
+  comment   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([productId])
+  @@map("reviews")
+}
