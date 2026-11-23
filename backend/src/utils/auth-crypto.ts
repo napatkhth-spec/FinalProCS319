@@ -33,13 +33,14 @@ export async function verifyPassword(password: string, hash: string | null): Pro
 export async function signAccessToken(userId: string): Promise<string> {
   const config = getAuthConfig();
   const key = new TextEncoder().encode(config.secret);
+  const issuedAt = Math.floor(Date.now() / 1000);
   return new SignJWT({})
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
     .setIssuer(config.issuer)
     .setAudience(config.audience)
     .setSubject(userId)
-    .setIssuedAt()
-    .setExpirationTime(`${config.accessTtlSeconds}s`)
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(issuedAt + config.accessTtlSeconds)
     .sign(key);
 }
 

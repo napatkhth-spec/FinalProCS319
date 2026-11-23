@@ -8,8 +8,33 @@ if (!connectionString) {
 }
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
-const farmerEmail = 'farmerdemo@gmail.com';
+const targetFarmers = [
+  { email: 'farmerdemo@gmail.com', province: 'จันทบุรี' },
+  { email: 'farmer1@gmail.com', province: 'นครราชสีมา' },
+  { email: 'dadada@gmail.com', province: 'เชียงใหม่' },
+] as const;
 const seedSkuPrefix = 'LFM-DEMO-';
+const expectedSeedProductCount = 47;
+const transactionProtectedSkus = new Set(['GARDEN-002', 'GARDEN-003']);
+
+function getOwnerEmail(product: (typeof products)[number]): string {
+  if (
+    product.category === 'ผลไม้' ||
+    product.category === 'ผลิตภัณฑ์จากสวน' ||
+    ['PROC-001', 'PROC-002', 'PROC-003'].includes(product.sku)
+  ) {
+    return 'farmerdemo@gmail.com';
+  }
+
+  if (
+    ['ข้าวและธัญพืช', 'เนื้อสัตว์', 'ไข่ไก่'].includes(product.category) ||
+    ['PROC-004', 'PROC-005', 'HERB-001', 'HERB-002'].includes(product.sku)
+  ) {
+    return 'farmer1@gmail.com';
+  }
+
+  return 'dadada@gmail.com';
+}
 
 const categories = [
   { name: 'ผลไม้', description: 'ผลไม้สดตามฤดูกาลจากเกษตรกรไทย' },
@@ -450,63 +475,169 @@ const products = [
 ];
 
 async function main() {
-  // Validate the existing demo account before making any database changes.
-  const farmerUser = await prisma.user.findUnique({
-    where: { email: farmerEmail },
-    select: { id: true, farmerProfile: { select: { id: true, verificationStatus: true } } },
-  });
-  if (!farmerUser)
-    throw new Error(`Required demo farmer account not found: ${farmerEmail}. No data was changed.`);
-  if (!farmerUser.farmerProfile || farmerUser.farmerProfile.verificationStatus !== 'APPROVED') {
+  const skuCounts = new Map<string, number>();
+  for (const product of products) {
+    skuCounts.set(product.sku, (skuCounts.get(product.sku) ?? 0) + 1);
+  }
+  if (products.length !== expectedSeedProductCount) {
     throw new Error(
-      `Demo farmer ${farmerEmail} does not have an APPROVED FarmerProfile. No data was changed.`,
+      `Expected ${expectedSeedProductCount} seed products, found ${products.length}. No data was changed.`,
     );
   }
-
-  const categoryIds = new Map<string, string>();
-  let createdCategories = 0;
-  for (const category of categories) {
-    const existing = await prisma.category.findUnique({
-      where: { name: category.name },
-      select: { id: true },
-    });
-    const saved = existing ?? (await prisma.category.create({ data: category, select: { id: true } }));
-    if (!existing) createdCategories += 1;
-    categoryIds.set(category.name, saved.id);
+  const duplicateSkus = [...skuCounts].filter(([, count]) => count > 1).map(([sku]) => sku);
+  if (duplicateSkus.length > 0) {
+    throw new Error(`Duplicate seed SKU(s): ${duplicateSkus.join(', ')}. No data was changed.`);
   }
 
-  let createdProducts = 0;
-  let updatedSeedProducts = 0;
-  for (const product of products) {
-    const sku = `${seedSkuPrefix}${product.sku}`;
-    const existing = await prisma.product.findUnique({
-      where: { sku },
-      select: { id: true, farmerId: true },
-    });
-    if (existing && existing.farmerId !== farmerUser.farmerProfile.id) {
-      throw new Error(`Seed SKU ${sku} belongs to a different farmer. No product was changed.`);
-    }
-    const data = {
-      farmerId: farmerUser.farmerProfile.id,
-      categoryId: categoryIds.get(product.category)!,
-      name: product.name,
-      description: product.description,
-      price: product.price,
-      stock: product.stock,
-      unit: product.unit,
-      status: ProductStatus.ACTIVE,
-    };
-    await prisma.product.upsert({
-      where: { sku },
-      create: { ...data, sku },
-      update: data,
-    });
-    if (existing) updatedSeedProducts += 1;
-    else createdProducts += 1;
-  }
+  const ownerEmails = new Map(products.map((product) => [product.sku, getOwnerEmail(product)]));
+  const seededSkus = products.map((product) => `${seedSkuPrefix}${product.sku}`);
+
+  const result = await prisma.$transaction(
+    async (tx) => {
+      // Validate every account, profile, SKU owner, and order reference before writing anything.
+      const farmerProfiles = new Map<string, { id: string; shopName: string }>();
+      for (const farmer of targetFarmers) {
+        const user = await tx.user.findUnique({
+          where: { email: farmer.email },
+          select: {
+            email: true,
+            roles: { select: { role: true } },
+            farmerProfile: {
+              select: { id: true, shopName: true, verificationStatus: true },
+            },
+          },
+        });
+        if (!user) {
+          throw new Error(`Required farmer account not found: ${farmer.email}. No data was changed.`);
+        }
+        if (!user.roles.some((assignment) => assignment.role === 'FARMER')) {
+          throw new Error(`Account ${farmer.email} does not have FARMER role. No data was changed.`);
+        }
+        if (!user.farmerProfile || user.farmerProfile.verificationStatus !== 'APPROVED') {
+          throw new Error(
+            `Account ${farmer.email} does not have an APPROVED FarmerProfile. No data was changed.`,
+          );
+        }
+        farmerProfiles.set(farmer.email, {
+          id: user.farmerProfile.id,
+          shopName: user.farmerProfile.shopName,
+        });
+      }
+
+      const targetProfileIds = new Set([...farmerProfiles.values()].map(({ id }) => id));
+      const existingProducts = await tx.product.findMany({
+        where: { sku: { in: seededSkus } },
+        select: {
+          sku: true,
+          farmerId: true,
+          _count: { select: { orderItems: true } },
+        },
+      });
+      const existingBySku = new Map(existingProducts.map((product) => [product.sku, product]));
+
+      for (const product of products) {
+        const sku = `${seedSkuPrefix}${product.sku}`;
+        const existing = existingBySku.get(sku);
+        if (!existing) continue;
+
+        const desiredFarmerEmail = ownerEmails.get(product.sku)!;
+        const desiredFarmerId = farmerProfiles.get(desiredFarmerEmail)!.id;
+        if (!targetProfileIds.has(existing.farmerId)) {
+          throw new Error(
+            `Seed SKU ${sku} belongs to a farmer outside the configured demo accounts. No data was changed.`,
+          );
+        }
+        if (existing.farmerId !== desiredFarmerId && existing._count.orderItems > 0) {
+          throw new Error(
+            `Seed SKU ${sku} has order history and cannot be reassigned. No data was changed.`,
+          );
+        }
+        if (
+          transactionProtectedSkus.has(product.sku) &&
+          existing._count.orderItems > 0 &&
+          existing.farmerId !== farmerProfiles.get('farmerdemo@gmail.com')!.id
+        ) {
+          throw new Error(
+            `Transaction-protected seed SKU ${sku} is not owned by farmerdemo. No data was changed.`,
+          );
+        }
+      }
+
+      const existingCategories = await tx.category.findMany({
+        where: { name: { in: categories.map(({ name }) => name) } },
+        select: { id: true, name: true },
+      });
+      const categoryIds = new Map(existingCategories.map(({ name, id }) => [name, id]));
+
+      // All preflight checks passed; writes below run atomically.
+      let createdCategories = 0;
+      for (const category of categories) {
+        if (categoryIds.has(category.name)) continue;
+        const created = await tx.category.create({ data: category, select: { id: true } });
+        categoryIds.set(category.name, created.id);
+        createdCategories += 1;
+      }
+
+      for (const farmer of targetFarmers) {
+        await tx.farmerProfile.update({
+          where: { id: farmerProfiles.get(farmer.email)!.id },
+          data: { province: farmer.province },
+        });
+      }
+
+      let createdProducts = 0;
+      let updatedSeedProducts = 0;
+      let transactionProductsPreserved = 0;
+      for (const product of products) {
+        const sku = `${seedSkuPrefix}${product.sku}`;
+        const existing = existingBySku.get(sku);
+        if (existing && existing._count.orderItems > 0) {
+          transactionProductsPreserved += 1;
+          continue;
+        }
+
+        const farmerEmail = ownerEmails.get(product.sku)!;
+        const data = {
+          farmerId: farmerProfiles.get(farmerEmail)!.id,
+          categoryId: categoryIds.get(product.category)!,
+          name: product.name,
+          description: product.description,
+          price: product.price,
+          stock: product.stock,
+          unit: product.unit,
+          status: ProductStatus.ACTIVE,
+        };
+        await tx.product.upsert({
+          where: { sku },
+          create: { ...data, sku },
+          update: data,
+        });
+        if (existing) updatedSeedProducts += 1;
+        else createdProducts += 1;
+      }
+
+      return {
+        createdCategories,
+        createdProducts,
+        updatedSeedProducts,
+        transactionProductsPreserved,
+        farmerProfiles,
+      };
+    },
+    { timeout: 30_000 },
+  );
 
   console.info(
-    `Seed complete: ${createdCategories} categories created (${categories.length} available); ${createdProducts} products created; ${updatedSeedProducts} seed products refreshed; farmer=${farmerEmail}.`,
+    `Seed complete: ${result.createdCategories} categories created (${categories.length} available); ` +
+      `${result.createdProducts} products created; ${result.updatedSeedProducts} seed products refreshed; ` +
+      `${result.transactionProductsPreserved} products with order history preserved; ` +
+      targetFarmers
+        .map(
+          (farmer) =>
+            `${farmer.email} (${result.farmerProfiles.get(farmer.email)!.shopName}, ${farmer.province})`,
+        )
+        .join('; ') +
+      '.',
   );
 }
 

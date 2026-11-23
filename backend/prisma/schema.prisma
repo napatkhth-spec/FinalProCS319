@@ -121,6 +121,9 @@ model FarmerProfile {
   id                 String                   @id @default(uuid()) @db.Uuid
   userId             String                   @unique @db.Uuid
   shopName           String
+  contactPhone       String?
+  nationalIdCiphertext String?                  @db.Text
+  nationalIdHash      String?                   @unique @db.Char(64)
   description        String?
   farmAddress        String?
   province           String?

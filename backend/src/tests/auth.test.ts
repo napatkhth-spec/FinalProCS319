@@ -15,6 +15,46 @@ import { loginSchema, registerSchema } from '../validators/auth.validator.js';
 process.env.ACCESS_TOKEN_SECRET = randomBytes(32).toString('base64url');
 process.env.ACCESS_TOKEN_ISSUER = 'local-farmer-market-api-test';
 process.env.ACCESS_TOKEN_AUDIENCE = 'local-farmer-market-web-test';
+process.env.ACCESS_TOKEN_TTL_SECONDS = '3600';
+process.env.NATIONAL_ID_ENCRYPTION_KEY = randomBytes(32).toString('hex');
+process.env.NATIONAL_ID_HASH_SECRET = randomBytes(48).toString('base64url');
+
+const { createFarmerProfileSchema } = await import('../validators/farmer.validator.js');
+const { encryptNationalId, hashNationalId } = await import('../utils/farmer-identity.js');
+
+function validThaiNationalId() {
+  const firstTwelve = '110170020345';
+  const sum = [...firstTwelve].reduce((total, digit, index) => total + Number(digit) * (13 - index), 0);
+  return `${firstTwelve}${(11 - (sum % 11)) % 10}`;
+}
+
+test('shop opening validates Thai phone and national ID checksum', () => {
+  const validId = validThaiNationalId();
+  const validInput = {
+    shopName: 'สวนทดสอบ',
+    contactPhone: '0812345678',
+    nationalId: validId,
+    province: 'เชียงใหม่',
+  };
+  assert.equal(createFarmerProfileSchema.safeParse(validInput).success, true);
+  assert.equal(createFarmerProfileSchema.safeParse({ ...validInput, contactPhone: '12345' }).success, false);
+  assert.equal(
+    createFarmerProfileSchema.safeParse({
+      ...validInput,
+      nationalId: `${validId.slice(0, 12)}${(Number(validId[12]) + 1) % 10}`,
+    }).success,
+    false,
+  );
+});
+
+test('national ID uses authenticated encryption and keyed hashing without storing plaintext', () => {
+  const nationalId = validThaiNationalId();
+  const ciphertext = encryptNationalId(nationalId);
+  assert.match(ciphertext, /^v1:/);
+  assert.equal(ciphertext.includes(nationalId), false);
+  assert.equal(hashNationalId(nationalId).length, 64);
+  assert.notEqual(hashNationalId(nationalId), nationalId);
+});
 
 test('email normalization and registration validation remain stable', () => {
   assert.equal(normalizeEmail('  Farmer@Test.Invalid  '), 'farmer@test.invalid');
@@ -56,15 +96,17 @@ test('passwords are hashed with Argon2id and legacy users without hashes cannot 
   assert.equal(await verifyPassword(password, null), false);
 });
 
-test('access JWT is short-lived, stateless, and validates issuer/audience/subject/expiry', async () => {
+test('access JWT expires after exactly one hour and validates issuer/audience/subject/expiry', async () => {
   const config = getAuthConfig();
   const token = await signAccessToken('user-id');
   const { payload } = await verifyAccessToken(token);
+  assert.equal(config.accessTtlSeconds, 3600);
   assert.equal(payload.sub, 'user-id');
   assert.equal(payload.sid, undefined);
   assert.equal(payload.iss, config.issuer);
   assert.equal(payload.aud, config.audience);
-  assert.ok(typeof payload.exp === 'number' && payload.exp > Math.floor(Date.now() / 1000));
+  assert.ok(typeof payload.iat === 'number');
+  assert.equal(payload.exp, payload.iat + 3600);
 
   const key = new TextEncoder().encode(config.secret);
   const wrongAudience = await new SignJWT({})

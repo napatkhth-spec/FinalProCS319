@@ -9,6 +9,8 @@ process.env.ACCESS_TOKEN_ISSUER = 'local-farmer-market-api-test';
 process.env.ACCESS_TOKEN_AUDIENCE = 'local-farmer-market-web-test';
 process.env.FRONTEND_URL = 'http://localhost:5173';
 process.env.NODE_ENV = 'test';
+process.env.NATIONAL_ID_ENCRYPTION_KEY = randomBytes(32).toString('hex');
+process.env.NATIONAL_ID_HASH_SECRET = randomBytes(48).toString('base64url');
 
 const [{ prisma }, { app }, { apiRouter }, { requireAccessToken, requireRoles, requireApprovedFarmer }] =
   await Promise.all([
@@ -69,19 +71,21 @@ const userModel = {
 };
 
 const farmerProfileModel = {
-  upsert: async ({ where, create }: any) => {
-    const user = users.get(where.userId);
+  create: async ({ data }: any) => {
+    const user = users.get(data.userId);
     assert.ok(user);
-    if (user.farmerProfile) return user.farmerProfile;
+    if (user.farmerProfile)
+      throw Object.assign(new Error('unique'), { code: 'P2002', meta: { target: 'userId' } });
     user.farmerProfile = {
       id: randomUUID(),
       userId: user.id,
-      ...create,
+      ...data,
       verificationStatus: FarmerVerificationStatus.PENDING,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    return user.farmerProfile;
+    const { nationalIdCiphertext: _ciphertext, nationalIdHash: _hash, ...safeProfile } = user.farmerProfile;
+    return safeProfile;
   },
   findMany: async ({ where }: any) =>
     [...users.values()]
@@ -104,6 +108,10 @@ const farmerProfileModel = {
     [...users.values()]
       .map((user) => user.farmerProfile)
       .find((profile) => profile && (profile.id === where.id || profile.userId === where.userId)) ?? null,
+  findFirst: async ({ where }: any) =>
+    [...users.values()]
+      .map((user) => user.farmerProfile)
+      .find((profile) => profile && profile.nationalIdHash === where.nationalIdHash) ?? null,
   findUniqueOrThrow: async ({ where }: any) => {
     const profile = [...users.values()]
       .map((user) => user.farmerProfile)
@@ -136,6 +144,14 @@ function installPrismaStub() {
         user: userModel,
         farmerProfile: farmerProfileModel,
         userRoleAssignment: userRoleAssignmentModel,
+        $queryRaw: async (query: any) => {
+          const requestedName = String(query.values[0]).trim().replace(/\s+/g, ' ').toLowerCase();
+          const exists = [...users.values()].some((candidate) => {
+            const profile = candidate.farmerProfile;
+            return profile && profile.shopName.trim().replace(/\s+/g, ' ').toLowerCase() === requestedName;
+          });
+          return [{ exists }];
+        },
       });
       if (failRegistrationAfterCreate) throw new Error('simulated transaction failure');
       return result;
@@ -399,6 +415,8 @@ test('buyer can submit a shop request as PENDING, but pending farmer cannot mana
     accessToken: token,
     body: {
       shopName: 'New Demo Shop',
+      contactPhone: '0812345678',
+      nationalId: validTestNationalId(),
       province: 'เชียงใหม่',
       description: 'Farm application',
       farmAddress: 'Demo road',
@@ -408,8 +426,63 @@ test('buyer can submit a shop request as PENDING, but pending farmer cannot mana
   const submittedData = ((await submitted.json()) as any).data;
   const profile = submittedData.farmerProfile;
   assert.equal(profile.verificationStatus, FarmerVerificationStatus.PENDING);
+  assert.equal(profile.contactPhone, '0812345678');
+  assert.equal('nationalIdCiphertext' in profile, false);
+  assert.equal('nationalIdHash' in profile, false);
   assert.deepEqual(submittedData.roles, [AppRole.BUYER, AppRole.FARMER]);
   assert.ok(buyer.roles.some((assignment: any) => assignment.role === AppRole.FARMER));
+  const duplicateAccount = await request('/api/farmers/profile', {
+    method: 'POST',
+    accessToken: token,
+    body: {
+      shopName: 'Another Shop',
+      contactPhone: '0812345678',
+      nationalId: validTestNationalId(),
+      province: 'เชียงใหม่',
+    },
+  });
+  assert.equal(duplicateAccount.status, 409);
+  const duplicateIdUser = await seedUser([AppRole.BUYER], {
+    passwordHash: await hashPassword('test-password-for-duplicate-id'),
+  });
+  const duplicateIdLogin = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: duplicateIdUser.email, password: 'test-password-for-duplicate-id' },
+  });
+  const duplicateIdToken = ((await duplicateIdLogin.json()) as any).data.accessToken;
+  const duplicateIdResponse = await request('/api/farmers/profile', {
+    method: 'POST',
+    accessToken: duplicateIdToken,
+    body: {
+      shopName: 'Different Shop',
+      contactPhone: '0898765432',
+      nationalId: validTestNationalId(),
+      province: 'เชียงใหม่',
+    },
+  });
+  assert.equal(duplicateIdResponse.status, 409);
+  assert.equal(((await duplicateIdResponse.json()) as any).message, 'เลขบัตรประชาชนนี้ถูกใช้ลงทะเบียนเปิดร้านค้าแล้ว');
+
+  const duplicateNameUser = await seedUser([AppRole.BUYER], {
+    passwordHash: await hashPassword('test-password-for-duplicate-name'),
+  });
+  const duplicateNameLogin = await request('/api/auth/login', {
+    method: 'POST',
+    body: { email: duplicateNameUser.email, password: 'test-password-for-duplicate-name' },
+  });
+  const duplicateNameToken = ((await duplicateNameLogin.json()) as any).data.accessToken;
+  const duplicateNameResponse = await request('/api/farmers/profile', {
+    method: 'POST',
+    accessToken: duplicateNameToken,
+    body: {
+      shopName: '  new   demo shop ',
+      contactPhone: '0861112233',
+      nationalId: validTestNationalId('110170020346'),
+      province: 'เชียงใหม่',
+    },
+  });
+  assert.equal(duplicateNameResponse.status, 409);
+  assert.equal(((await duplicateNameResponse.json()) as any).message, 'ชื่อร้านค้านี้ถูกใช้งานแล้ว');
   assert.equal(
     (
       await request('/api/products', {
@@ -439,6 +512,11 @@ test('buyer can submit a shop request as PENDING, but pending farmer cannot mana
     403,
   );
 });
+
+function validTestNationalId(firstTwelve = '110170020345') {
+  const sum = [...firstTwelve].reduce((total, digit, index) => total + Number(digit) * (13 - index), 0);
+  return `${firstTwelve}${(11 - (sum % 11)) % 10}`;
+}
 
 test('admin farmer approvals list only pending profiles and reject non-admin callers', async () => {
   const pending = await seedUser([AppRole.BUYER, AppRole.FARMER], {

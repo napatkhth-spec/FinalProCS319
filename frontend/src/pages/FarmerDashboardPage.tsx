@@ -17,6 +17,8 @@ import {
 import { useAuthStore } from '../stores/auth.store';
 import type { FarmerProfile, Product } from '../types';
 import { THAI_PROVINCES } from '../constants/thai-provinces';
+import { isValidThaiNationalId } from '../features/farmers/farmer-validation';
+import { getApiErrorMessage } from '../lib/api-error';
 
 const blankProduct: ProductInput = {
   categoryId: '',
@@ -50,6 +52,8 @@ export function FarmerDashboardPage() {
   const productsQuery = useQuery({ queryKey: ['my-products'], queryFn: listMyProducts, enabled: isFarmer });
   const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: listCategories });
   const [shopName, setShopName] = useState('');
+  const [shopPhone, setShopPhone] = useState('');
+  const [nationalId, setNationalId] = useState('');
   const [shopDescription, setShopDescription] = useState('');
   const [farmAddress, setFarmAddress] = useState('');
   const [shopProvince, setShopProvince] = useState('');
@@ -59,6 +63,7 @@ export function FarmerDashboardPage() {
   const [imageError, setImageError] = useState('');
   const [imageMessage, setImageMessage] = useState('');
   const pendingImagesRef = useRef<PendingProductImage[]>([]);
+  const nationalIdInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     pendingImagesRef.current = pendingImages;
   }, [pendingImages]);
@@ -70,7 +75,7 @@ export function FarmerDashboardPage() {
     ]);
   };
   const openMutation = useMutation({
-    mutationFn: () => openShop(shopName, shopProvince, shopDescription, farmAddress),
+    mutationFn: () => openShop(shopName, shopProvince, shopPhone, nationalId, shopDescription, farmAddress),
     onSuccess: async (result) => {
       if (user && accessToken)
         setSession({ ...user, roles: result.roles, farmerProfile: result.farmerProfile }, accessToken);
@@ -152,6 +157,16 @@ export function FarmerDashboardPage() {
     event.preventDefault();
     productMutation.mutate();
   }
+  function submitShopApplication(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nationalIdInput = nationalIdInputRef.current;
+    if (!nationalIdInput) return;
+    nationalIdInput.setCustomValidity(
+      isValidThaiNationalId(nationalId) ? '' : 'กรุณากรอกเลขบัตรประชาชนให้ถูกต้อง',
+    );
+    if (!event.currentTarget.reportValidity()) return;
+    openMutation.mutate();
+  }
   function selectProductImages(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = '';
@@ -188,13 +203,7 @@ export function FarmerDashboardPage() {
       ) : !isFarmer ? (
         <>
           <p className="mt-3 text-stone-600">เปิดร้านเพื่อเพิ่มบทบาทเกษตรกร โดยไม่ลบบทบาทผู้ซื้อ</p>
-          <form
-            className="mt-6 max-w-2xl space-y-4 rounded-xl bg-white p-5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              openMutation.mutate();
-            }}
-          >
+          <form className="mt-6 max-w-2xl space-y-4 rounded-xl bg-white p-5" onSubmit={submitShopApplication}>
             <label className="block text-sm">
               ชื่อร้าน
               <input
@@ -202,6 +211,39 @@ export function FarmerDashboardPage() {
                 maxLength={120}
                 value={shopName}
                 onChange={(event) => setShopName(event.target.value)}
+                className="mt-1 w-full rounded-lg border px-3 py-2"
+              />
+            </label>
+            <label className="block text-sm">
+              เบอร์โทรศัพท์ร้าน
+              <input
+                required
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                maxLength={10}
+                pattern="0[0-9]{8,9}"
+                title="กรอกเบอร์โทรศัพท์ไทย 9–10 หลัก โดยขึ้นต้นด้วย 0"
+                value={shopPhone}
+                onChange={(event) => setShopPhone(event.target.value)}
+                className="mt-1 w-full rounded-lg border px-3 py-2"
+              />
+            </label>
+            <label className="block text-sm">
+              เลขบัตรประชาชน (ใช้ยืนยันตัวตนและจะถูกจัดเก็บแบบเข้ารหัส)
+              <input
+                required
+                inputMode="numeric"
+                autoComplete="off"
+                minLength={13}
+                maxLength={13}
+                pattern="[0-9]{13}"
+                ref={nationalIdInputRef}
+                value={nationalId}
+                onChange={(event) => {
+                  event.target.setCustomValidity('');
+                  setNationalId(event.target.value);
+                }}
                 className="mt-1 w-full rounded-lg border px-3 py-2"
               />
             </label>
@@ -246,7 +288,7 @@ export function FarmerDashboardPage() {
             )}
             {openMutation.isError && (
               <p role="alert" className="text-red-700">
-                {openMutation.error.message || 'เปิดร้านไม่สำเร็จ'}
+                {getApiErrorMessage(openMutation.error, 'เปิดร้านไม่สำเร็จ')}
               </p>
             )}
             <button

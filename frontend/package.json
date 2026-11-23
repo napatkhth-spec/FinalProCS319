@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty",
-    "test": "node --experimental-strip-types --test tests/auth-store.test.mjs tests/cart-store.test.mjs tests/thai-provinces.test.mjs"
+    "test": "node --experimental-strip-types --test tests/auth-store.test.mjs tests/access-token-expiration.test.mjs tests/cart-store.test.mjs tests/farmer-validation.test.mjs tests/thai-provinces.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.87.4",

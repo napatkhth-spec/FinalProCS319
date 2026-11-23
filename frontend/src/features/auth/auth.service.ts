@@ -11,6 +11,12 @@ export async function loginWithEmail(email: string, password: string): Promise<A
   return response.data.data;
 }
 
+export async function getCurrentUser(): Promise<User> {
+  const response = await apiClient.get<ApiResponse<User>>('/auth/me');
+  if (!response.data.data) throw new Error('โหลดข้อมูลบัญชีไม่สำเร็จ');
+  return response.data.data;
+}
+
 export async function logoutFromBackend(): Promise<void> {
   await apiClient.post('/auth/logout');
 }
@@ -18,6 +24,8 @@ export async function logoutFromBackend(): Promise<void> {
 export async function openShop(
   shopName: string,
   province: string,
+  contactPhone: string,
+  nationalId: string,
   description?: string,
   farmAddress?: string,
 ) {
@@ -26,6 +34,8 @@ export async function openShop(
   >('/farmers/profile', {
     shopName,
     province,
+    contactPhone,
+    nationalId,
     ...(description ? { description } : {}),
     ...(farmAddress ? { farmAddress } : {}),
   });

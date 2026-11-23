@@ -6,8 +6,8 @@ export function getAuthConfig() {
     throw new HttpError(503, 'Authentication is not configured');
   }
 
-  const accessTtlSeconds = Number(process.env.ACCESS_TOKEN_TTL_SECONDS ?? 600);
-  if (!Number.isInteger(accessTtlSeconds) || accessTtlSeconds < 60 || accessTtlSeconds > 900) {
+  const accessTtlSeconds = Number(process.env.ACCESS_TOKEN_TTL_SECONDS ?? 3600);
+  if (!Number.isInteger(accessTtlSeconds) || accessTtlSeconds < 60 || accessTtlSeconds > 3600) {
     throw new HttpError(503, 'Authentication is not configured');
   }
 
